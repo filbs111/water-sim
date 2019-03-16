@@ -20,8 +20,9 @@
 	uniform mat4 uPMatrix;
 	uniform float uTime;
 	varying vec3 vPos;
+	varying vec3 vColor;
 	
-	void addWaveContribution(in vec3 wavePosIn, inout vec3 wavePosAccum, float peakiness, vec2 waveCycles){	//waveCycles should be int2
+	void addWaveContribution(in vec3 wavePosIn, inout vec3 wavePosAccum, inout vec3 vDerivativeWRTX, inout vec3 vDerivativeWRTY, float peakiness, vec2 waveCycles){	//waveCycles should be int2
 		//wavecycles - number of waves across repeating square in each direction.
 		//wavevector relates to this...
 		//speed of wave - deep water, speed ~ sqrt(wavelength)
@@ -65,6 +66,11 @@
 		
 		float ampl = peakiness/(invWavelength*CONST_TAU);
 		wavePosAccum+= ampl*vec3( cos(phase)*waveCycles/invWavelength, sin(phase) );
+		
+		//add derivative to vDerivativeWRTX, vDerivativeWRTY (TODO combine into matrix?)
+		vec3 derivVector = ampl*vec3( -sin(phase)*waveCycles/invWavelength , cos(phase) );	//educated guess TODO proper working
+		vDerivativeWRTX += waveCycles.x * derivVector;
+		vDerivativeWRTY += waveCycles.y * derivVector;
 	}
 	
 	void main(void) {
@@ -77,12 +83,38 @@
 		
 		vec3 vModifiedVertexPosition = vec3( aVertexPosition.xy, 0.0);	//AFAIK copies it..
 		
-		addWaveContribution(aVertexPosition, vModifiedVertexPosition, 0.3, vec2(1.0,0.0));
-		addWaveContribution(aVertexPosition, vModifiedVertexPosition, 0.3, vec2(0.0,2.0));
-		addWaveContribution(aVertexPosition, vModifiedVertexPosition, 0.3, vec2(-3.0,-1.0));
-		addWaveContribution(aVertexPosition, vModifiedVertexPosition, 0.3, vec2(4.0,-6.0));
-		addWaveContribution(aVertexPosition, vModifiedVertexPosition, 0.3, vec2(-7.0,11.0));
+		//create vectors to describe surface dervative as function on input x,z. TODO use a matrix for this - combo with vModifiedVertexPosition?
+		vec3 vDerivativeWRTX = vec3(1./CONST_TAU,0.,0.);
+		vec3 vDerivativeWRTY = vec3(0.,1./CONST_TAU,0.);
+		
+		addWaveContribution(aVertexPosition, vModifiedVertexPosition, vDerivativeWRTX, vDerivativeWRTY, 0.2, vec2(1.0,0.0));
+		addWaveContribution(aVertexPosition, vModifiedVertexPosition, vDerivativeWRTX, vDerivativeWRTY, 0.2, vec2(-3.0,2.0));
+		addWaveContribution(aVertexPosition, vModifiedVertexPosition, vDerivativeWRTX, vDerivativeWRTY, 0.2, vec2(3.0,-4.0));
+		addWaveContribution(aVertexPosition, vModifiedVertexPosition, vDerivativeWRTX, vDerivativeWRTY, 0.2, vec2(-4.0,2.0));
+		//addWaveContribution(aVertexPosition, vModifiedVertexPosition, vDerivativeWRTX, vDerivativeWRTY, 0.2, vec2(1.0,4.0));
+		//addWaveContribution(aVertexPosition, vModifiedVertexPosition, vDerivativeWRTX, vDerivativeWRTY, 0.2, vec2(0.0,2.0));
+		//addWaveContribution(aVertexPosition, vModifiedVertexPosition, vDerivativeWRTX, vDerivativeWRTY, 0.2, vec2(-5.0,5.0));
 	
+		//where are waves in wavevec space?
+		// ------x--   -4   -3   -2   -1    0    1    2    3    4
+		//		y	-4						|				*	
+		//			-3			  *			|					
+		//			-2						|
+		//			-1		 				|
+		//			 0	-------------------------*---------------
+		//			 1		 				|
+		//			 2	*					|				
+		//			 3						|		  
+		//			 4						|	 *
+		
+	
+		//==============
+		
+		vec3 surfNorm = normalize(cross(vDerivativeWRTX,vDerivativeWRTY));	//get surface normal by cross product of derivative vectors
+		
+		vColor = 0.5*surfNorm + 0.5;	//pass through to frag shader
+		//vColor = vec3(0.5*surfNorm.x + 0.5); //try simple side lighting
+		
 		//==============
 	
 		vec4 transformedCoord = uMVMatrix * vec4(vModifiedVertexPosition,1.0);	//todo use 4x3 mat?
@@ -97,9 +129,13 @@
 <script id="shader-simple-fs" type="x-shader/x-fragment">
 	precision mediump float;
 	varying vec3 vPos;
+	varying vec3 vColor;
 
 	void main(void){
-		gl_FragColor=vec4(1.0,0.0,vPos.z*5.0+0.25,1.0);
+		//gl_FragColor=vec4(1.0,0.0,vPos.z*5.0+0.25,1.0);
+		//gl_FragColor=vec4(vColor,1.0);
+		gl_FragColor=vec4(vColor*vec3(1.0,0.0,vPos.z*5.0+0.25),1.0);
+		
 		//gl_FragColor=vec4(mod(vPos.x,1.0),mod(vPos.y,1.0),vPos.z,1.0);	//mod pointless now because 0-1 square
 	}
 	
@@ -107,6 +143,14 @@
 
 
 <script type="text/javascript">
+/*
+//drawing normals
+//each wave component is (x,y,z) as a function of input x,z
+// derivative of this wrt input x,z gives surface vectors, cross product to get the normal
+// simply sum contributions to these 2 derivative vectors for wave components
+// x-product and normalise at end
+*/
+
 //create a grid object, draw with polygon strips
 //some shader to make vertices move in simple test
 //create simple sinusoidal waves that are periodic, sum these in the vertex shader, passing in current
