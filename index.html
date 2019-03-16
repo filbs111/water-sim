@@ -1,0 +1,302 @@
+<!doctype HTML>
+<html>
+<head>
+<meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+<meta content="utf-8" http-equiv="encoding">
+
+<title>water simulation</title>
+
+<script type="text/javascript" src="lib/gl-matrix-min.js"></script>
+<script type="text/javascript" src="utils/webgl_utils.js"></script>
+
+
+
+<script id="shader-simple-vs" type="x-shader/x-vertex">
+	#define CONST_TAU 6.2831853
+
+	attribute vec3 aVertexPosition;
+	//attribute vec3 aVertexNormal;
+	uniform mat4 uMVMatrix;
+	uniform mat4 uPMatrix;
+	uniform float uTime;
+	varying vec3 vPos;
+	
+	void addWaveContribution(in vec3 wavePosIn, inout vec3 wavePosAccum, float peakiness, vec2 waveCycles){	//waveCycles should be int2
+		//wavecycles - number of waves across repeating square in each direction.
+		//wavevector relates to this...
+		//speed of wave - deep water, speed ~ sqrt(wavelength)
+		// wavevector = 2pi/wavelength. wave speed= angularvelocity*wavevector ie (rads/s) / (rads/m)
+			//		or speed = frequency*wavelength
+			
+		// sqrt(wavelength) = angvec * (2pi/wavelength)
+		
+		//frequency = speed/wavelength ~ sqrt(wavelength)/wavelength = 1/sqrt(wavelength)
+		
+		//square is 16x16 (TODO make unit square? then can change grid size for fidelity without other messing
+		
+		//var normalisedGridPos = wavePos
+				
+		//wavevector is wavecycles * 2PI / square_side_length
+		// square_side_length = 1
+		
+		//wavevector (IIRC direction/wavelength) ~ vec2(n,m), so wavelength = 1/sqrt(n*n+m*m)
+		// wavelength = 1/length (wavevector/2PI) = 1/length(wavecycles)
+		
+		float invWavelength = length(waveCycles);
+		
+		//since freq and therefore ang vel proportional to 1/invWavelength
+		float someConstant = 5.0;	//affects speed of animation
+		float freq = someConstant*sqrt(invWavelength);	//<--this why pythagorean tribles not working!
+			//unless find triples whose lengths are square! eg 7 24 25, (and 0 1 1, 0 4 4 0 9 9 etc)
+		//presumably there is some distribution of wave amplitude with wavelength. for now just try manual terms. IIRC some ratio (since fluid particles circular path)
+		//makes pointy waves. therefore pass in "peakiness" - 1 for sharp peak. rolling wheel. 1 revolution in 2pi radii -> pi* peak-to-peak amplitude
+		
+		//round angfreq so loops? (uTime from 0 to 1 so freq should be integer)
+		freq=ceil(freq);
+		
+		/*
+		float phase = CONST_TAU * (uTime*angFreq + dot(waveCycles, wavePosIn.xy));	//TODO should angvel be hardcoded/passed into shader (rather than calc for each vertex)
+									//if time is to loop, should ensure waves loop in time - guess by subtle manipulation of angVel (pythagorean triples unrealistic)
+		//is this the problem?
+		phase=mod(phase,CONST_TAU);	//if works, should mod with 1 before multiplying with CONST_TAU. .... it doesn't work! still glitches!	
+		*/
+		
+		float phase = CONST_TAU* (uTime*freq + dot(waveCycles, wavePosIn.xy));	
+		
+		float ampl = peakiness/(invWavelength*CONST_TAU);
+		wavePosAccum+= ampl*vec3( cos(phase)*waveCycles/invWavelength, sin(phase) );
+	}
+	
+	void main(void) {
+		/*
+		float vHeight = 0.1*sin( CONST_TAU*(uTime + aVertexPosition.x) );
+		vHeight += 0.1*sin( CONST_TAU*(uTime + aVertexPosition.y) );	//sum of sines
+		
+		vec3 vModifiedVertexPosition = vec3(aVertexPosition.xy, vHeight);	//override height (ignoring what's passed in as attrib)
+		*/
+		
+		vec3 vModifiedVertexPosition = vec3( aVertexPosition.xy, 0.0);	//AFAIK copies it..
+		
+		addWaveContribution(aVertexPosition, vModifiedVertexPosition, 0.3, vec2(1.0,0.0));
+		addWaveContribution(aVertexPosition, vModifiedVertexPosition, 0.3, vec2(0.0,2.0));
+		addWaveContribution(aVertexPosition, vModifiedVertexPosition, 0.3, vec2(-3.0,-1.0));
+		addWaveContribution(aVertexPosition, vModifiedVertexPosition, 0.3, vec2(4.0,-6.0));
+		addWaveContribution(aVertexPosition, vModifiedVertexPosition, 0.3, vec2(-7.0,11.0));
+	
+		//==============
+	
+		vec4 transformedCoord = uMVMatrix * vec4(vModifiedVertexPosition,1.0);	//todo use 4x3 mat?
+		gl_Position = uPMatrix * transformedCoord;
+		
+		//vPos=aVertexPosition;	//still use random z for some texture effect
+		vPos=vModifiedVertexPosition+0.1*aVertexPosition;
+		
+	}
+</script>
+
+<script id="shader-simple-fs" type="x-shader/x-fragment">
+	precision mediump float;
+	varying vec3 vPos;
+
+	void main(void){
+		gl_FragColor=vec4(1.0,0.0,vPos.z*5.0+0.25,1.0);
+		//gl_FragColor=vec4(mod(vPos.x,1.0),mod(vPos.y,1.0),vPos.z,1.0);	//mod pointless now because 0-1 square
+	}
+	
+</script>
+
+
+<script type="text/javascript">
+//create a grid object, draw with polygon strips
+//some shader to make vertices move in simple test
+//create simple sinusoidal waves that are periodic, sum these in the vertex shader, passing in current
+//shade 
+//make the wave behave in a sensible way for shallow water - is wave speed constant?
+//maybe be able to pass in wave parameters? uniform buffer etc? maybe skip
+//change from simple sinusoidal waves to trochoidal/gerstner waves
+
+
+var shaderPrograms={};
+function initShaders(){
+	shaderPrograms.simple = loadShader( "shader-simple-vs", "shader-simple-fs",{
+					attributes:["aVertexPosition"],
+					uniforms:["uMVMatrix","uPMatrix","uTime"]
+					});
+}
+
+
+function generateGridBuffers(){
+	//TODO buffers should be include whether or not they are strip or triangle type. 
+	//initially just do triangles. strip more efficient. for large grid, towards 1 vertex per triangle, rather than 3. (though indexed, so cost quite small)
+
+	var gridSize = 32;
+	var vertices = [];
+	var indices = [];
+	//create vertices first. for 3-sphere grid, loops, so different (here have vertices on opposite sides (and 4 corners) that share z-position
+	for (var ii=0;ii<=gridSize;ii++){
+		for (var jj=0;jj<=gridSize;jj++){
+			vertices.push(ii/gridSize);			//TODO how to push multiple things onto an array? 
+			vertices.push(jj/gridSize);
+			vertices.push(Math.random());	//TODO maybe shouldn't have z. z might be used for other stuff though eg water depth.
+		}
+	}
+	//TODO strip data, but regular tris data easier.
+	var startIdx=0;
+	var nextRowStartIdx = gridSize+1;
+	for (var ii=0;ii<gridSize;ii++){
+		for (var jj=0;jj<gridSize;jj++){
+			indices.push(startIdx);
+			indices.push(nextRowStartIdx);
+			indices.push(nextRowStartIdx+1);
+			
+			indices.push(startIdx);
+			indices.push(nextRowStartIdx+1);
+			indices.push(startIdx+1);
+			
+			startIdx++;
+			nextRowStartIdx++;
+		}
+		startIdx+=1;
+		nextRowStartIdx+=1;
+	}
+	return {vertices:vertices, indices:indices};
+}
+
+var gridBuffers={};
+
+function initBuffers(){
+
+	loadBufferData(gridBuffers, generateGridBuffers());
+
+	function bufferArrayData(buffer, arr, size){
+		gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STATIC_DRAW);
+		buffer.itemSize = size;
+		buffer.numItems = arr.length / size;
+		console.log("buffered. numitems: " + buffer.numItems);
+	}
+	
+	function loadBufferData(bufferObj, sourceData){
+		bufferObj.vertexPositionBuffer = gl.createBuffer();
+		bufferArrayData(bufferObj.vertexPositionBuffer, sourceData.vertices, 3);
+		//stuff about normals etc present in 3-sph project got this from, removed here. 
+		
+		//triangles rather than strip, but no big deal- frag shader does most of the work!
+		bufferObj.vertexIndexBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufferObj.vertexIndexBuffer);
+		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(sourceData.indices), gl.STATIC_DRAW);
+		bufferObj.vertexIndexBuffer.itemSize = 3;
+		bufferObj.vertexIndexBuffer.numItems = sourceData.indices.length;
+	}
+}
+
+
+//copied from 3sphere project. much of this unused since objs here don't have normals, textures
+function drawObjectFromBuffers(bufferObj, shaderProg, usesCubeMap){
+	prepBuffersForDrawing(bufferObj, shaderProg, usesCubeMap);
+	drawObjectFromPreppedBuffers(bufferObj, shaderProg);
+}
+function prepBuffersForDrawing(bufferObj, shaderProg, usesCubeMap){
+	gl.enable(gl.CULL_FACE);
+	gl.bindBuffer(gl.ARRAY_BUFFER, bufferObj.vertexPositionBuffer);
+    gl.vertexAttribPointer(shaderProg.attributes.aVertexPosition, bufferObj.vertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+	
+	/*
+	if (bufferObj.vertexNormalBuffer && shaderProg.attributes.aVertexNormal){
+		gl.bindBuffer(gl.ARRAY_BUFFER, bufferObj.vertexNormalBuffer);
+		gl.vertexAttribPointer(shaderProg.attributes.aVertexNormal, bufferObj.vertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+	}
+	*/
+	gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufferObj.vertexIndexBuffer);
+	/*
+	if (bufferObj.vertexTextureCoordBuffer){
+		gl.bindBuffer(gl.ARRAY_BUFFER, bufferObj.vertexTextureCoordBuffer);
+		gl.vertexAttribPointer(shaderProg.attributes.aTextureCoord, bufferObj.vertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+		gl.activeTexture(gl.TEXTURE0);
+		gl.bindTexture(gl.TEXTURE_2D, texture);
+		gl.uniform1i(shaderProg.uniforms.uSampler, 0);
+	}
+	
+	if (usesCubeMap){
+		gl.activeTexture(gl.TEXTURE0);
+		gl.bindTexture(gl.TEXTURE_CUBE_MAP, cubemapTexture);
+		gl.uniform1i(shaderProg.uniforms.uSampler, 0);
+	}
+	*/
+	//gl.uniformMatrix4fv(shaderProg.uniforms.uPMatrix, false, pMatrix);
+}
+
+var mvMatrix = mat4.create();
+mat4.identity(mvMatrix);
+var pMatrix = mat4.create();
+mat4.identity(pMatrix);
+//mat4.translate(mvMatrix,vec3.fromArray([0,0,-10])); //glmatix expects own vector type
+
+mvMatrix[14]=-0.6;	//move back to look at thing (is this camera or thing position?)
+mvMatrix[13]=-0.25;
+mvMatrix[12]=-0.5;
+
+mat4.rotateX(mvMatrix, -1.3);	//rads
+
+function drawObjectFromPreppedBuffers(bufferObj, shaderProg){
+	gl.uniformMatrix4fv(shaderProg.uniforms.uPMatrix, false, pMatrix);	//TODO not every frame.
+	//console.log((new Date()).getTime());
+	//gl.uniform1fv(shaderProg.uniforms.uTime, [10]);
+	gl.uniformMatrix4fv(shaderProg.uniforms.uMVMatrix, false, mvMatrix);
+	gl.drawElements(gl.TRIANGLES, bufferObj.vertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+}
+
+function drawScene(){
+	requestAnimationFrame(drawScene);
+	resizecanvas(1);	//TODO should this really happen every frame? perf impact?
+	gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);	//TODO should this be every frame?
+
+	mat4.perspective(60, gl.viewportWidth/gl.viewportHeight, 0.1,200.0,pMatrix);	//apparently 0.9.5, last param is matrix rather than 1st!! todo use newer???
+																	//also old one uses degs!
+
+	
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+	var activeShaderProgram = shaderPrograms.simple;
+	gl.useProgram(activeShaderProgram);
+	gl.uniform1fv(activeShaderProgram.uniforms.uTime, [0.00005*((new Date()).getTime() % 20000 )]);	//20s loop
+	
+	//todo if drawing many, prep buffers once.
+	drawObjectFromBuffers(gridBuffers, activeShaderProgram);
+	//should loop so shift to the side?
+	mvMatrix[12]+=1;
+	drawObjectFromBuffers(gridBuffers, activeShaderProgram);
+	mvMatrix[12]-=2;
+	drawObjectFromBuffers(gridBuffers, activeShaderProgram);
+	mvMatrix[12]+=1;
+	
+}
+
+
+function init(){
+	canvas = document.getElementById("mycanvas");
+
+	initGL();
+	
+	//try clearing to green
+	gl.clearColor.apply(gl,[1,1,0,1]);
+	//gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+	
+	initShaders();
+	initBuffers();
+	gl.enable(gl.DEPTH_TEST);
+	
+	requestAnimationFrame(drawScene);
+}
+	
+</script>
+
+</head>
+
+<body onload="init()">
+
+<canvas id="mycanvas"></canvas>
+
+
+</body>
+</html>
